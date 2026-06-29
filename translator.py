@@ -7,28 +7,6 @@ from torch.utils.data import TensorDataset, DataLoader
 
 #English -> Chinese
 
-class PositionEncoding(nn.Module):
-
-    def __init__(self, d_model = 512, max_len = 1000): 
-
-        super().__init__()
-
-        pe = torch.zeros(max_len, d_model) 
-
-        position = torch.arange(start = 0, end = max_len, step = 1).float().unsqueeze(1) 
-        embedding_index = torch.arange(start = 0, end = d_model, step = 2).float() 
-
-        div_term = 1 / torch.tensor(10000.0)**(embedding_index / d_model)
-
-        pe[:, 0::2] = torch.sin(position * div_term) 
-        pe[:, 1::2] = torch.cos(position * div_term)
-
-        self.register_buffer('pe', pe) 
-    
-    def forward(self, word_embeddings):
-
-        return word_embeddings + self.pe[:word_embeddings.size(0), :] 
-
 
 class Attention(nn.Module):
 
@@ -67,8 +45,32 @@ class EncoderRnn(nn.Module):
 
         super().__init__()
 
-        self.lstm = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 8)
+        self.bi_lstm = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1, bidirectional=True)
+        
+        self.uni_lstm1 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.uni_lstm2 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.uni_lstm3 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.uni_lstm4 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.uni_lstm5 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.uni_lstm6 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.uni_lstm7 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+
+    def forward(self, input):
+
+        bi_lstm_out, temp1 = self.bi_lstm(input)
+        uni_lstm_out, temp2 = self.uni_lstm(bi_lstm_out)
 
 class DecoderRnn(nn.Module):
 
-    pass
+    def __init__(self, num_tokens, d_model, max_len):
+
+        super().__init__()
+
+        self.lstm1 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.lstm2 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.lstm3 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.lstm4 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.lstm5 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.lstm6 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.lstm7 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
+        self.lstm8 = nn.LSTM(input_size = 1, hidden_size = 1, num_layers = 1)
