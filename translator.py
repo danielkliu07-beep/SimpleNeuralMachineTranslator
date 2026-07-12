@@ -31,7 +31,7 @@ class PositionEncoding(nn.Module):
 
     def forward(self, word_embeddings):
 
-        return word_embeddings + self.pe[:word_embeddings.size(0), :] 
+        return word_embeddings + self.pe[:, :word_embeddings.size(1), :] 
 
 
 
@@ -90,6 +90,8 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
     
     def forward(self, seq1, seq2, mask = None):
+
+        #Running head blocks simultaneously -> inputs and outputs of different head blocks do not connect
         out = torch.cat([head(seq1, seq2, mask) for head in self.heads], dim = -1) #Finds all outputs for cross attention and turns them into a single vector
         #This vector represents all of the changes a vector embedding will take
 
@@ -194,22 +196,29 @@ class Translator(nn.Module):
         #Encoder Block
 
         src_embedding = self.src_embedding(src)
-        src_positional_encoding = src_embedding + self.pos_encoding(src_embedding)
+        src_positional_encoding = self.pos_encoding(src_embedding)
 
-        encoder_outputs = torch.cat([EncoderBlock(src_positional_encoding, src_mask) for EncoderBlock in self.encoder_blocks])
+        #Run encoding blocks sequentially -> encoder block output becomes the next encoder blocks input
+        encoder_output = src_positional_encoding
+        for block in self.encoder_blocks:
+            encoder_output = block(encoder_output, padding_mask = src_mask)
+
 
         #Decoder Block
 
         tgt_embedding = self.tgt_embedding(tgt)
-        tgt_positional_encoding = tgt_embedding + self.pos_encoding(tgt_embedding)
+        tgt_positional_encoding = self.pos_encoding(tgt_embedding)
 
-        decoder_outputs = torch.cat([DecoderBlock(tgt_positional_encoding, encoder_outputs, src_mask, tgt_mask) for DecoderBlock in self.decoder_blocks])
-
+        #Run decoding blocks sequentially
+        decoder_output = tgt_positional_encoding
+        for block in self.decoder_blocks:
+            decoder_output = block(decoder_output, encoder_output, tgt_mask, src_mask)
+        
         #Final output
 
-        output = self.fc_layer(decoder_outputs)
+        output = self.fc_layer(decoder_output)
 
-        output = F.softmax(output, dim = -1)
+        #output = F.softmax(output, dim = -1)
 
         return output
 
