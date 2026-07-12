@@ -14,25 +14,24 @@ from torchtext.datasets import Multi30k
 
 class PositionEncoding(nn.Module):
 
-    def __init__(self, d_model = 2, max_len = 6): #d_model - dimension of the model (number of word embedding values per token), max_len - max number of tokens our Transformer can process (input and output combined)
+    def __init__(self, d_model, max_len): 
 
         super().__init__()
 
-        pe = torch.zeros(max_len, d_model) #6 rows by 2 columns matrix of zeros
+        pe = torch.zeros(max_len, d_model).unsqueeze(0)
 
-        position = torch.arange(start = 0, end = max_len, step = 1).float().unsqueeze(1) #creates a tensor of [0, 1, 2, 3, 4, 5], .unsqueeze(1) turns the tensor into a column matrix
-        embedding_index = torch.arange(start = 0, end = d_model, step = 2).float() #tensor of [0, 2], same as 2i
+        position = torch.arange(start = 0, end = max_len, step = 1).float().unsqueeze(1) 
+        embedding_index = torch.arange(start = 0, end = d_model, step = 2).float()
 
-        div_term = 1 / torch.tensor(10000.0)**(embedding_index / d_model) #tensor of all 10000^(2i/d_model))
+        div_term = 1 / torch.tensor(10000.0)**(embedding_index / d_model) 
+        pe[:, 0::2] = torch.sin(position * div_term) 
+        pe[:, 1::2] = torch.cos(position * div_term) 
 
-        pe[:, 0::2] = torch.sin(position * div_term) #Applies sin to even columns - 'start:stop:step -> 0::2'
-        pe[:, 1::2] = torch.cos(position * div_term) #Applies sin to odd columns
+        self.register_buffer('pe', pe) 
 
-        self.register_buffer('pe', pe) #Ensures pe gets moved to a GPU if we use one 
-    
     def forward(self, word_embeddings):
 
-        return word_embeddings + self.pe[:word_embeddings.size(0), :] #Adds positional encoding values to the word embedding values
+        return word_embeddings + self.pe[:word_embeddings.size(0), :] 
 
 
 
@@ -84,14 +83,14 @@ class Head(nn.Module):
 
 class MultiHeadAttention(nn.Module):
 
-    def __init__(self, num_heads, head_size, dropout):
+    def __init__(self, num_heads, head_size, embed_dim, dropout):
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-        self.proj = nn.Linear(head_size * num_heads, head_size) #head_size * num_heads = embed_dim
+        self.heads = nn.ModuleList([Head(embed_dim, head_size, dropout) for _ in range(num_heads)])
+        self.proj = nn.Linear(head_size * num_heads, embed_dim) #head_size * num_heads = embed_dim
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, seq1, seq2):
-        out = torch.cat([head(seq1, seq2) for head in self.heads], dim = -1) #Finds all outputs for cross attention and turns them into a single vector
+    def forward(self, seq1, seq2, mask = None):
+        out = torch.cat([head(seq1, seq2, mask) for head in self.heads], dim = -1) #Finds all outputs for cross attention and turns them into a single vector
         #This vector represents all of the changes a vector embedding will take
 
         out = self.dropout(self.proj(out)) #Put it through a fully connected layer and apply dropout to it
@@ -127,12 +126,19 @@ class EncoderBlock(nn.Module):
         #Encoder block goes through multiheaded attention, layer norm, and feed forward
 
         head_size = embed_dim // num_heads
-        self.cross_attention = MultiHeadAttention(num_heads, head_size)
-        self.ffwd = FeedForward(embed_dim)
+        self.sa = MultiHeadAttention(num_heads, head_size, embed_dim, dropout)
+        self.ffwd = FeedForward(embed_dim, dropout)
         self.ln1 = nn.LayerNorm(embed_dim)
         self.ln2 = nn.LayerNorm(embed_dim)
     
-    def forward(self, x):
+    def forward(self, x, padding_mask = None):
+
+        #input -> Normalize input -> put it through sa -> add this to itself
+        #input -> Normalize input -> put it through ffwd -> add it to itself
+
+        x = x + self.sa(self.ln1(x), self.ln1(x), mask = padding_mask)
+        x = x + self.ffwd(self.ln2(x))
+
         return x
 
 class DecoderBlock(nn.Module):
@@ -142,20 +148,70 @@ class DecoderBlock(nn.Module):
 
         #Decoder block goes through masked multi-headed attention, multi-headed attention, layer norm, and feed forward
 
+        head_size = embed_dim // num_heads
+        self.sa = MultiHeadAttention(num_heads, head_size, embed_dim, dropout)
+        self.ca = MultiHeadAttention(num_heads, head_size, embed_dim, dropout)
+
+        self.ffwd = FeedForward(embed_dim, dropout)
+        self.ln1 = nn.LayerNorm(embed_dim)
+        self.ln2 = nn.LayerNorm(embed_dim) #layer norm 2 
+        self.lnenc2 = nn.LayerNorm(embed_dim) #layer norm 2 for encoder outputs
+        self.ln3 = nn.LayerNorm(embed_dim)
+    
+    def forward(self, x, enc_kv, causal_mask = None, padding_mask = None): #(x, encoder_kv) -> x is input, encoder_kv -> outputs of encoder
+
+        #causal mask - hides future info, prevents it from looking ahead
+        #padding mask - hides blank spaces for cross-attention since they're useless, completely optional
+
+        x = x + self.sa(self.ln1(x), self.ln1(x), mask = causal_mask)
+
+        x = x + self.ca(self.ln2(x), self.lnenc2(enc_kv), mask = padding_mask)
+
+        x = x + self.ffwd(self.ln3(x))
+
+        return x
+
 
 
 
 class Translator(nn.Module):
 
-    def __init__(self):
+    def __init__(self, src_vocab_size, tgt_vocab_size, embed_dim, num_heads, num_layers, dropout, max_len = 5000):
         super().__init__()
 
-        #Take in input
-        #Position encode input
-        #Put the input through multi-headed attnetion
-        #Feed forward input
+        self.src_embedding = nn.Embedding(src_vocab_size, embed_dim)
+        self.tgt_embedding = nn.Embedding(tgt_vocab_size, embed_dim)
+        self.pos_encoding = PositionEncoding(embed_dim, max_len)
 
+        #Stacking multiple blocks (layers) using nn.ModuleList
+        self.encoder_blocks = nn.ModuleList([EncoderBlock(embed_dim, num_heads, dropout) for _ in range(num_layers)])
+        self.decoder_blocks = nn.ModuleList([DecoderBlock(embed_dim, num_heads, dropout) for _ in range(num_layers)])
 
+        self.fc_layer = nn.Linear(in_features = embed_dim, out_features = tgt_vocab_size)
+    
+    def forward(self, src, tgt, src_mask = None, tgt_mask = None):
+
+        #Encoder Block
+
+        src_embedding = self.src_embedding(src)
+        src_positional_encoding = src_embedding + self.pos_encoding(src_embedding)
+
+        encoder_outputs = torch.cat([EncoderBlock(src_positional_encoding, src_mask) for EncoderBlock in self.encoder_blocks])
+
+        #Decoder Block
+
+        tgt_embedding = self.tgt_embedding(tgt)
+        tgt_positional_encoding = tgt_embedding + self.pos_encoding(tgt_embedding)
+
+        decoder_outputs = torch.cat([DecoderBlock(tgt_positional_encoding, encoder_outputs, src_mask, tgt_mask) for DecoderBlock in self.decoder_blocks])
+
+        #Final output
+
+        output = self.fc_layer(decoder_outputs)
+
+        output = F.softmax(output, dim = -1)
+
+        return output
 
 
 
